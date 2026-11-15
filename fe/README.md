@@ -1,11 +1,21 @@
 ﻿# NucleoMonitor React
 
-Frontend React/Vite dengan empat halaman HTML asli yang dipertahankan di `public/pages/`. Halaman Dashboard, Fasilitas, Pemantauan, dan Laporan membaca API dari backend di `../be`.
+Frontend React/Vite untuk NucleoMonitor. Halaman Dashboard, Data Fasilitas, Pemantauan, Laporan, dan Catatan Komunitas berada di `public/pages/`.
 
-## Menjalankan
+## Menjalankan aplikasi
 
-1. Jalankan `npm install` di folder `Week9/be`, lalu `npm run dev`.
-2. Buka terminal kedua, jalankan `npm install` di folder `Week9/fe`, lalu `npm run dev`.
-3. Buka URL frontend yang muncul di terminal, biasanya `http://localhost:5173/`.
+Dari folder `Week9`, jalankan sekali untuk memasang dependensi frontend:
 
-Laporan baru disimpan backend ke `Week9/be/data/db.json`. Data fasilitas dan pemantauan masih berupa data simulasi.
+```powershell
+npm.cmd install
+```
+
+Lalu jalankan frontend dan backend bersama-sama:
+
+```powershell
+npm.cmd run dev
+```
+
+Buka alamat frontend yang tampil di terminal, biasanya `http://localhost:5173`. API backend berjalan di `http://localhost:3000`.
+
+Laporan baru disimpan di `../be/data/db.json`. Data fasilitas, pemantauan, dan catatan komunitas adalah data simulasi.

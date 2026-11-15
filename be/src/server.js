@@ -1,16 +1,12 @@
-import cors from 'cors';
-import express from 'express';
+﻿import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const app = express();
 const port = Number(process.env.PORT) || 3000;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataFile = path.join(here, '..', 'data', 'db.json');
-
-app.use(cors({ origin: process.env.FRONTEND_ORIGIN || 'http://localhost:5173' }));
-app.use(express.json({ limit: '32kb' }));
+const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 
 async function readDatabase() {
   return JSON.parse(await readFile(dataFile, 'utf8'));
@@ -21,69 +17,93 @@ async function writeDatabase(data) {
   await writeFile(dataFile, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
 }
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'NucleoMonitor API' });
-});
+async function readBody(request) {
+  let raw = '';
+  for await (const chunk of request) {
+    raw += chunk;
+    if (raw.length > 32 * 1024) throw Object.assign(new Error('Ukuran permintaan terlalu besar.'), { status: 413 });
+  }
+  try { return JSON.parse(raw || '{}'); }
+  catch { throw Object.assign(new Error('Body harus berformat JSON.'), { status: 400 }); }
+}
 
-app.get('/api/facilities', async (_req, res, next) => {
+function send(response, status, payload) {
+  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(payload));
+}
+
+const server = createServer(async (request, response) => {
+  const origin = request.headers.origin;
+  if (!origin || origin === allowedOrigin) {
+    response.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    response.setHeader('Vary', 'Origin');
+  }
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204);
+    response.end();
+    return;
+  }
+
+  const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
   try {
-    const { facilities } = await readDatabase();
-    res.json(facilities);
-  } catch (error) { next(error); }
-});
-
-app.get('/api/monitoring', async (req, res, next) => {
-  try {
-    const { monitoring } = await readDatabase();
-    const type = req.query.type;
-    res.json(type && type !== 'Semua' ? monitoring.filter((item) => item.type === type) : monitoring);
-  } catch (error) { next(error); }
-});
-
-app.get('/api/reports', async (_req, res, next) => {
-  try {
-    const { reports } = await readDatabase();
-    res.json(reports);
-  } catch (error) { next(error); }
-});
-
-app.post('/api/reports', async (req, res, next) => {
-  try {
-    const { id, category, date, status, description } = req.body ?? {};
-    if (![id, category, date, status, description].every((value) => typeof value === 'string' && value.trim())) {
-      return res.status(400).json({ error: 'Semua kolom wajib diisi.' });
+    if (request.method === 'GET' && url.pathname === '/api/health') {
+      send(response, 200, { status: 'ok', service: 'NucleoMonitor API' });
+      return;
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
-      return res.status(400).json({ error: 'Tanggal harus menggunakan format YYYY-MM-DD.' });
+    if (request.method === 'GET' && url.pathname === '/api/facilities') {
+      send(response, 200, (await readDatabase()).facilities);
+      return;
     }
-    if (!['Kualitas Udara', 'Kualitas Air', 'Kualitas Tanah', 'Lainnya'].includes(category)) {
-      return res.status(400).json({ error: 'Kategori laporan tidak valid.' });
+    if (request.method === 'GET' && url.pathname === '/api/monitoring') {
+      const { monitoring } = await readDatabase();
+      const type = url.searchParams.get('type');
+      send(response, 200, type && type !== 'Semua' ? monitoring.filter((item) => item.type === type) : monitoring);
+      return;
     }
-    if (!['Ditinjau', 'Menunggu Tinjauan'].includes(status)) {
-      return res.status(400).json({ error: 'Status laporan tidak valid.' });
+    if (request.method === 'GET' && url.pathname === '/api/reports') {
+      send(response, 200, (await readDatabase()).reports);
+      return;
     }
-
-    const database = await readDatabase();
-    if (database.reports.some((report) => report.id.toLowerCase() === id.trim().toLowerCase())) {
-      return res.status(409).json({ error: 'ID laporan sudah digunakan.' });
+    if (request.method === 'POST' && url.pathname === '/api/reports') {
+      const { id, category, date, status, description } = await readBody(request);
+      if (![id, category, date, status, description].every((value) => typeof value === 'string' && value.trim())) {
+        send(response, 400, { error: 'Semua kolom wajib diisi.' });
+        return;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+        send(response, 400, { error: 'Tanggal harus menggunakan format YYYY-MM-DD.' });
+        return;
+      }
+      if (!['Kualitas Udara', 'Kualitas Air', 'Kualitas Tanah', 'Lainnya'].includes(category)) {
+        send(response, 400, { error: 'Kategori laporan tidak valid.' });
+        return;
+      }
+      if (!['Ditinjau', 'Menunggu Tinjauan'].includes(status)) {
+        send(response, 400, { error: 'Status laporan tidak valid.' });
+        return;
+      }
+      const database = await readDatabase();
+      if (database.reports.some((report) => report.id.toLowerCase() === id.trim().toLowerCase())) {
+        send(response, 409, { error: 'ID laporan sudah digunakan.' });
+        return;
+      }
+      const report = { id: id.trim(), category, date, status, description: description.trim() };
+      database.reports.push(report);
+      await writeDatabase(database);
+      send(response, 201, report);
+      return;
     }
-    const report = { id: id.trim(), category, date, status, description: description.trim() };
-    database.reports.push(report);
-    await writeDatabase(database);
-    return res.status(201).json(report);
-  } catch (error) { next(error); }
+    if (request.method === 'GET' && url.pathname === '/api/community-notes') {
+      send(response, 200, (await readDatabase()).communityNotes);
+      return;
+    }
+    send(response, 404, { error: 'Endpoint tidak ditemukan.' });
+  } catch (error) {
+    console.error(error);
+    send(response, error.status || 500, { error: error.status ? error.message : 'Terjadi kesalahan pada server.' });
+  }
 });
 
-app.get('/api/community-notes', async (_req, res, next) => {
-  try {
-    const { communityNotes } = await readDatabase();
-    res.json(communityNotes);
-  } catch (error) { next(error); }
-});
-
-app.use((error, _req, res, _next) => {
-  console.error(error);
-  res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
-});
-
-app.listen(port, () => console.log(`NucleoMonitor API berjalan di http://localhost:${port}`));
+server.listen(port, () => console.log(`NucleoMonitor API berjalan di http://localhost:${port}`));
